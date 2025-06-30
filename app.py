@@ -6,6 +6,15 @@ import plotly.express as px
 import plotly.graph_objects as go
 import datetime
 import numpy as np
+import streamlit.components.v1 as components
+import math
+from statsmodels.tsa.seasonal import seasonal_decompose
+from great_tables import GT, html, style, loc 
+
+# from tabs.overview import render_tab as render_overview_tab
+# from tabs.quotes import render_tab as render_quotes_tab
+# from tabs.charts import render_tab as render_charts_tab
+# from tabs.analytics import render_tab as render_analytics_tab
 
 # Simple fuzzy search function
 def fuzzy_search(query, items, threshold=2):
@@ -136,11 +145,22 @@ country_name_to_code = {
     'Zambia': 'ZMB', 'Zimbabwe': 'ZWE'
 }
 
+
 # Main content area
 st.title("Global Markets Dashboard")
 
 # Create tabs
 tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Quotes", "Charts", "Analytics"])
+
+# with tab1:
+#     render_overview_tab()
+# with tab2:
+#     render_quotes_tab()
+# with tab3:
+#     render_charts_tab()
+# with tab4:
+#     render_analytics_tab()
+
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
@@ -149,12 +169,7 @@ with tab1:
             [
                 "Stock Indices % Change", 
                 "Currency vs USD % Change", 
-                "Market Movers (Gainers)", 
-                "Market Movers (Losers)",
-                "Market Status (Open/Closed)",
-                "24 Hour Change",
-                "7 Day Change",
-                "Volatility"
+                "Market Status (Open/Closed)"
             ],
             index=0
         )
@@ -339,10 +354,7 @@ with tab1:
             st.write("- **Local Currency**: Available via API")
             st.write("- **Exchange Rate**: Check forex pairs")
             st.write("- **Market Status**: Varies by exchange")
-            
-            # Add note about potential API calls
-            st.caption("*For countries without major stock indices, currency data can be fetched via /exchange_rate endpoint using the country's ISO code*")
-        
+                    
     st.markdown("---")
 
     # — Top Movers / KPIs Placeholders —
@@ -371,9 +383,6 @@ with tab1:
         
         # Subtle methodology note
         st.caption("*Based on major indices: US (S&P 500, NASDAQ, Dow), Europe (DAX, FTSE, CAC), Asia (Nikkei, Shanghai, NIFTY), Africa (JSE Top 40, EGX 30)*")
-
-
-
 
 with tab2:
     st.subheader("Quotes")
@@ -507,7 +516,7 @@ with tab2:
         
         # Display as clickable table rows using buttons
         st.markdown("**Click on the stock button to view details**")
-        
+        st.markdown("---")
         # Header row
         col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 3, 2, 2, 2, 2, 2, 2])
         with col1:
@@ -625,8 +634,8 @@ with tab2:
             
             # Page info
             st.caption(f"Showing {total_rows} results across {total_pages} pages")
-        
-            
+            st.caption("**Source:** Data retrieved from 12data API on June 10, 2024.")
+
     else:
         st.warning("No stocks found matching your search criteria.")
 
@@ -1621,7 +1630,176 @@ with tab3:
                 st.metric("Volume", f"{sum(volumes):,}")
             else:
                 st.metric("Volume", "N/A")
+        
+        # --- Time Series Decomposition ---
+        st.markdown("---")
+        st.markdown("### Time Series Decomposition")
+        st.caption("Decomposes the selected symbol's price series into trend, seasonal, and residual components using additive decomposition.")
+        
+        min_periods = 90
+        if len(closes) >= min_periods:
+            import pandas as pd
+            closes_series = pd.Series(closes)
+            # Use a period of 7 for weekly seasonality as a minimal example
+            result = seasonal_decompose(closes_series, model='additive', period=7)
+            from plotly.subplots import make_subplots
+            import plotly.graph_objects as go
+            fig_decomp = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.03,
+                                      subplot_titles=["Observed", "Trend", "Seasonal", "Residual"])
+            fig_decomp.add_trace(go.Scatter(y=result.observed, mode="lines", name="Observed", line=dict(width=2)), row=1, col=1)
+            fig_decomp.add_trace(go.Scatter(y=result.trend, mode="lines", name="Trend", line=dict(width=2)), row=2, col=1)
+            fig_decomp.add_trace(go.Scatter(y=result.seasonal, mode="lines", name="Seasonal", line=dict(width=2)), row=3, col=1)
+            fig_decomp.add_trace(go.Scatter(y=result.resid, mode="lines", name="Residual", line=dict(width=2)), row=4, col=1)
+            fig_decomp.update_layout(height=700, template="plotly_white", showlegend=False, margin=dict(t=60, l=40, r=20, b=40))
+            st.plotly_chart(fig_decomp, use_container_width=True)
+        else:
+            st.info(f"Decomposition requires at least {min_periods} data points. Select a longer date range.")
+
     
+        st.markdown(f"## Balance Sheet for {st.session_state.selected_symbol}")
+        
+        # Custom Alphabet Inc. Cash Flows Data (in millions)
+        cash_flow_data = {
+            "Line Item": [
+                "Net income",
+                "Depreciation of property and equipment",
+                "Stock-based compensation expense",
+                "Deferred income taxes",
+                "Loss (gain) on debt and equity securities, net",
+                "Other",
+                "Accounts receivable, net",
+                "Income taxes, net",
+                "Other assets",
+                "Accounts payable",
+                "Accrued expenses and other liabilities",
+                "Accrued revenue share",
+                "Deferred revenue",
+                "Net cash provided by operating activities",
+                "Purchases of property and equipment",
+                "Purchases of marketable securities",
+                "Maturities and sales of marketable securities",
+                "Purchases of non-marketable securities",
+                "Maturities and sales of non-marketable securities",
+                "Acquisitions, net of cash acquired, and purchases of intangible assets",
+                "Other investing activities",
+                "Net cash used in investing activities",
+                "Net payments related to stock-based award activities",
+                "Repurchases of stock",
+                "Dividend payments",
+                "Proceeds from issuance of debt, net of costs",
+                "Repayments of debt",
+                "Proceeds from sale of interest in consolidated entities, net",
+                "Net cash used in financing activities",
+                "Effect of exchange rate changes on cash and cash equivalents",
+                "Net increase (decrease) in cash and cash equivalents",
+                "Cash and cash equivalents at beginning of period",
+                "Cash and cash equivalents at end of period"
+            ],
+            "2022": [59972, 13475, 19362, -8081, 5519, 3483, -2317, 584, -5046, 707, 3915, -445, 367, 91495, -31485, -78874, 97822, -2531, 150, -6969, 1589, -20298, -9300, -59296, 0, 52872, -54068, 35, -69757, -506, 934, 20945, 21879],
+            "2023": [73795, 11946, 22460, -7763, 823, 4330, -7833, 523, -2143, 664, 3937, 482, 525, 101746, -32251, -77858, 86672, -3027, 947, -495, -1051, -27063, -9837, -61504, 0, 10790, -11550, 8, -72093, -421, 2169, 21879, 24048],
+            "2024": [100118, 15311, 22785, -5257, -2671, 3419, -5891, -2418, -1397, 359, -1161, 1059, 1043, 125299, -52535, -86679, 103428, -5034, 882, -2931, -2667, -45536, -12190, -62222, -7363, 13589, -12701, 1154, -79733, -612, -582, 24048, 23466]
+        }
+
+        # Define group labels for each row in the cash flow statement
+        group_labels = [
+            # Operating activities
+            "Operating activities",  # Net income
+            "Operating activities",  # Depreciation of property and equipment
+            "Operating activities",  # Stock-based compensation expense
+            "Operating activities",  # Deferred income taxes
+            "Operating activities",  # Loss (gain) on debt and equity securities, net
+            "Operating activities",  # Other
+            "Operating activities",  # Accounts receivable, net
+            "Operating activities",  # Income taxes, net
+            "Operating activities",  # Other assets
+            "Operating activities",  # Accounts payable
+            "Operating activities",  # Accrued expenses and other liabilities
+            "Operating activities",  # Accrued revenue share
+            "Operating activities",  # Deferred revenue
+            "Operating activities",  # Net cash provided by operating activities
+            # Investing activities
+            "Investing activities",  # Purchases of property and equipment
+            "Investing activities",  # Purchases of marketable securities
+            "Investing activities",  # Maturities and sales of marketable securities
+            "Investing activities",  # Purchases of non-marketable securities
+            "Investing activities",  # Maturities and sales of non-marketable securities
+            "Investing activities",  # Acquisitions, net of cash acquired, and purchases of intangible assets
+            "Investing activities",  # Other investing activities
+            "Investing activities",  # Net cash used in investing activities
+            # Financing activities
+            "Financing activities",  # Net payments related to stock-based award activities
+            "Financing activities",  # Repurchases of stock
+            "Financing activities",  # Dividend payments
+            "Financing activities",  # Proceeds from issuance of debt, net of costs
+            "Financing activities",  # Repayments of debt
+            "Financing activities",  # Proceeds from sale of interest in consolidated entities, net
+            "Financing activities",  # Net cash used in financing activities
+            # Not grouped (summary lines)
+            "",  # Effect of exchange rate changes on cash and cash equivalents
+            "",  # Net increase (decrease) in cash and cash equivalents
+            "",  # Cash and cash equivalents at beginning of period
+            "",  # Cash and cash equivalents at end of period
+        ]
+
+        cf_df = pd.DataFrame(cash_flow_data)
+        cf_df["Group"] = group_labels
+
+        # Precompute even and odd row indices for custom row striping
+        even_rows = list(range(0, len(cf_df), 2))
+        odd_rows = list(range(1, len(cf_df), 2))
+
+        # Display with Great Tables
+        gt_cashflow = (
+            GT(cf_df, rowname_col="Line Item", groupname_col="Group")
+            .tab_header(
+                title="Alphabet Inc. - Consolidated Statements of Cash Flows",
+                subtitle="(in millions)"
+            )
+            .tab_spanner(label="Time", columns=["2022", "2023", "2024"])
+            .fmt_number(columns=["2022", "2023", "2024"], decimals=0, sep_mark=",")
+            # Custom row striping for better readability (body)
+            .tab_style(
+                style=style.fill(color="#0e1117"),
+                locations=loc.body(rows=even_rows)
+            )
+            .tab_style(
+                style=style.fill(color="#181c24"),
+                locations=loc.body(rows=odd_rows)
+            )
+            # Custom row striping for stub (row labels)
+            .tab_style(
+                style=style.fill(color="#0e1117"),
+                locations=loc.stub(rows=even_rows)
+            )
+            .tab_style(
+                style=style.fill(color="#181c24"),
+                locations=loc.stub(rows=odd_rows)
+            )
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.body())
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.stub())
+            .tab_style(style=style.fill(color="#0e1117"), locations=loc.header())
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.header())
+            .tab_style(style=style.fill(color="#0e1117"), locations=loc.column_labels())
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.column_labels())
+            .tab_style(style=style.fill(color="#0e1117"), locations=loc.stubhead())
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.stubhead())
+            .tab_style(style=style.fill(color="#0e1117"), locations=loc.row_groups())
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.row_groups())
+            .tab_style(style=style.fill(color="#0e1117"), locations=loc.spanner_labels(["Time"]))
+            .tab_style(style=style.text(color="#fafafa"), locations=loc.spanner_labels(["Time"]))
+        )
+        row_height = 39  # px, adjust as needed for your styling
+        base_height = 140  # px, for header, spanners, etc.
+
+        num_rows = cf_df.shape[0] + 4
+        dynamic_height = base_height + row_height * (num_rows)
+
+        components.html(gt_cashflow.as_raw_html(), height=dynamic_height, scrolling=False)
+
+        # Centered footnote and source
+        st.markdown('<div style="text-align:center;"><b>Footnote</b></div>', unsafe_allow_html=True)
+        st.markdown('<div style="text-align:center;">Source: <a href="https://www.alphabet.com/investor/financials/cash-flow" target="_blank">Alphabet Inc.</a></div>', unsafe_allow_html=True)
+
     else:
         st.markdown("---")
 
@@ -1855,7 +2033,7 @@ with tab4:
         st.markdown("---")
         st.markdown("### Scatter Plot Analysis")
         
-        scatter_col1, scatter_col2 = st.columns([2, 2])
+        scatter_col1, scatter_col2, scatter_col3 = st.columns([2, 2, 2])
         
         with scatter_col1:
             # X/Y metric selectors
@@ -1875,6 +2053,19 @@ with tab4:
             # Color by sector
             color_by_sector = st.checkbox("Color by Sector", value=True, key="color_sector_toggle")
         
+        with scatter_col3:
+            # Bubble chart toggle and size variable
+            bubble_chart = st.checkbox("Bubble Chart", value=False, key="bubble_chart_toggle")
+            if bubble_chart:
+                size_metric = st.selectbox(
+                    "Bubble Size Metric:",
+                    ["Market Cap", "Volume Change", "Volatility", "Returns", "Sharpe Ratio", "P/E Ratio"],
+                    index=0,
+                    key="bubble_size_selector"
+                )
+            else:
+                size_metric = None
+        
         # Create scatter plot data
         if len(st.session_state.selected_symbols_analytics) > 1:
             scatter_data = []
@@ -1889,26 +2080,32 @@ with tab4:
                 volatility = np.std(returns)
                 volume_change = np.random.normal(0, 0.1)  # Simulated volume change
                 market_cap = symbol_info["market_cap"]
-                
-                # Calculate Beta (simplified - in real app would use market index data)
-                # Beta = Covariance(stock_returns, market_returns) / Variance(market_returns)
-                # For demo, simulate beta values between 0.5 and 1.5
                 beta = 0.5 + np.random.random()  # Simulated beta
-                
-                # Calculate Sharpe Ratio (simplified - in real app would use risk-free rate)
-                # Sharpe = (Return - Risk_Free_Rate) / Volatility
-                risk_free_rate = 0.02  # Assume 2% risk-free rate
+                risk_free_rate = 0.02
                 sharpe_ratio = (mean_return - risk_free_rate) / volatility if volatility > 0 else 0
-                
-                # P/E Ratio (simplified - in real app would come from API)
-                # For demo, simulate P/E ratios between 10 and 50
-                pe_ratio = 10 + np.random.random() * 40  # Simulated P/E ratio
+                pe_ratio = 10 + np.random.random() * 40
                 
                 # Determine color
                 if color_by_sector:
                     color = symbol_info["sector"]
                 else:
                     color = symbol
+                
+                # Determine size value
+                if bubble_chart and size_metric:
+                    size_value = (
+                        market_cap / 1e12 if size_metric == "Market Cap" else (
+                            volume_change if size_metric == "Volume Change" else (
+                                volatility if size_metric == "Volatility" else (
+                                    mean_return if size_metric == "Returns" else (
+                                        sharpe_ratio if size_metric == "Sharpe Ratio" else pe_ratio
+                                    )
+                                )
+                            )
+                        )
+                    )
+                else:
+                    size_value = 12  # Default fixed size for scatterplot
                 
                 scatter_data.append({
                     "symbol": symbol,
@@ -1935,12 +2132,24 @@ with tab4:
                         )
                     ),
                     "color": color,
-                    "sector": symbol_info["sector"]
+                    "sector": symbol_info["sector"],
+                    "size": size_value
                 })
             
-            # Create scatter plot
+            # Create scatter/bubble plot
             fig_scatter = go.Figure()
             
+            def normalize_sizes(values, min_size=10, max_size=40):
+                values = np.array(values)
+                # Use absolute value if you want to show magnitude
+                values = np.abs(values)
+                # Avoid all zeros
+                if np.all(values == 0):
+                    return np.full_like(values, min_size)
+                # Rescale to [min_size, max_size]
+                norm = (values - values.min()) / (values.max() - values.min()) if values.max() > values.min() else np.zeros_like(values)
+                return min_size + norm * (max_size - min_size)
+
             # Group by color
             color_groups = {}
             for data in scatter_data:
@@ -1953,26 +2162,27 @@ with tab4:
                 x_vals = [d["x"] for d in group_data]
                 y_vals = [d["y"] for d in group_data]
                 symbols = [d["symbol"] for d in group_data]
-                
+                sizes_raw = [d["size"] for d in group_data]
+                sizes = normalize_sizes(sizes_raw)                
                 fig_scatter.add_trace(go.Scatter(
                     x=x_vals,
                     y=y_vals,
                     mode='markers+text',
                     marker=dict(
-                        size=12,  # Consistent size for all points
+                        size=sizes if bubble_chart else 12,
+                        sizemode="area" if bubble_chart else "diameter",
+                        sizeref=(2.*max(sizes)/(40.**2)) if bubble_chart and len(sizes) > 0 else None,
+                        sizemin=4 if bubble_chart else None,
                         opacity=0.8
                     ),
                     text=symbols,
                     textposition="top center",
                     name=color,
-                    hovertemplate="<b>%{text}</b><br>" +
-                                f"{x_metric}: %{{x:.4f}}<br>" +
-                                f"{y_metric}: %{{y:.4f}}<br>" +
-                                "<extra></extra>"
+                    hovertemplate=f"<b>%{{text}}</b><br>{x_metric}: %{{x:.4f}}<br>{y_metric}: %{{y:.4f}}<br>"
                 ))
             
             fig_scatter.update_layout(
-                title=f"{x_metric} vs {y_metric}",
+                title=f"{x_metric} vs {y_metric}" + (" (Bubble Chart)" if bubble_chart else ""),
                 xaxis_title=x_metric,
                 yaxis_title=y_metric,
                 height=500,
@@ -2147,5 +2357,74 @@ with tab4:
             # Export risk metrics
             if st.button("Export Risk Metrics", use_container_width=True):
                 st.success("(In real app, this would download a CSV file)")
-    
+        
+        # --- Small Multiples ---
+        st.markdown("---")
+        st.markdown("### Small Multiples: Returns by Symbol")
 
+        # Small Multiples Metric Selector
+        small_multiples_metric = st.selectbox(
+            "Metric for Small Multiples:",
+            ["Returns", "Volatility", "Volume Change"],
+            index=0,
+            key="small_multiples_metric_selector"
+        )
+        
+        from plotly.subplots import make_subplots
+        import plotly.graph_objects as go
+        import math
+        
+        selected_symbols = st.session_state.selected_symbols_analytics
+        n = len(selected_symbols)
+        if n > 0:
+            # Determine grid size (square-ish)
+            ncols = math.ceil(math.sqrt(n))
+            nrows = math.ceil(n / ncols)
+            fig_mult = make_subplots(
+                rows=nrows, cols=ncols,
+                subplot_titles=selected_symbols,
+                shared_xaxes=True, shared_yaxes=True,
+                horizontal_spacing=0.05, vertical_spacing=0.12
+            )
+            for idx, symbol in enumerate(selected_symbols):
+                row = idx // ncols + 1
+                col = idx % ncols + 1
+                # Get symbol info
+                symbol_info = next((s for s in analytics_symbols if s["ticker"] == symbol), None)
+                # Get returns
+                returns = returns_data[symbol]
+                # Select y values based on metric
+                if small_multiples_metric == "Returns":
+                    y_vals = returns
+                elif small_multiples_metric == "Volatility":
+                    y_vals = [np.std(returns[:i+1]) if i > 0 else 0 for i in range(len(returns))]
+                elif small_multiples_metric == "Volume Change":
+                    y_vals = [np.random.normal(0, 0.1) for _ in range(len(returns))]  # Simulated
+                else:
+                    y_vals = returns
+                fig_mult.add_trace(
+                    go.Scatter(y=y_vals, mode="lines", name=symbol, showlegend=False, line=dict(width=2)),
+                    row=row, col=col
+                )
+            # Make all axes visible and comparable
+            fig_mult.update_xaxes(showgrid=True, zeroline=True)
+            fig_mult.update_yaxes(showgrid=True, zeroline=True)
+            fig_mult.update_layout(
+                height=250 * nrows,
+                template="plotly_white",
+                margin=dict(t=60, l=40, r=20, b=40)
+            )
+            st.plotly_chart(fig_mult, use_container_width=True)
+
+            if small_multiples_metric == "Returns":
+                y_unit = "decimal (0.01 = 1%)"
+            elif small_multiples_metric == "Volatility":
+                y_unit = "decimal (std dev of returns)"
+            elif small_multiples_metric == "Volume Change":
+                y_unit = "arbitrary units"
+            else:
+                y_unit = ""
+                
+            st.caption(f"X-axis: Period Index (days)   |   Y-axis: {small_multiples_metric} [{y_unit}]")
+        else:
+            st.info("Select at least one symbol to view small multiples.")
