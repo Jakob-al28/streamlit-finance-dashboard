@@ -10,6 +10,10 @@ import streamlit.components.v1 as components
 import math
 from statsmodels.tsa.seasonal import seasonal_decompose
 from great_tables import GT, html, style, loc 
+import backend.data_fetching
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+import datetime
+import yfinance as yf
 
 # from tabs.overview import render_tab as render_overview_tab
 # from tabs.quotes import render_tab as render_quotes_tab
@@ -384,9 +388,7 @@ with tab1:
         # Subtle methodology note
         st.caption("*Based on major indices: US (S&P 500, NASDAQ, Dow), Europe (DAX, FTSE, CAC), Asia (Nikkei, Shanghai, NIFTY), Africa (JSE Top 40, EGX 30)*")
 
-with tab2:
-    st.subheader("Quotes")
-    
+with tab2:    
     # Initialize session state for settings
     if 'rows_per_page' not in st.session_state:
         st.session_state.rows_per_page = 25
@@ -412,13 +414,85 @@ with tab2:
         {"ticker": "NVDA", "name": "NVIDIA Corp.", "last_price": 485.09, "change": 15.23, "change_pct": 3.24, "volume": 4200000, "bid": 485.00, "ask": 485.20, "day_high": 490.00, "day_low": 480.00, "year_high": 500.00, "year_low": 300.00, "market_cap": "1.20T"},
         {"ticker": "NFLX", "name": "Netflix Inc.", "last_price": 492.98, "change": -8.45, "change_pct": -1.68, "volume": 950000, "bid": 492.90, "ask": 493.10, "day_high": 500.00, "day_low": 490.00, "year_high": 550.00, "year_low": 400.00, "market_cap": "218B"},
     ]
-    
+
     # Controls Row
+    quotes_df = backend.data_fetching.get_top_stocks_quotes()
+    quotes_df = quotes_df.drop(columns=['open'])
     search_filter = st.text_input(
         "Search (Ticker/Name)",
         placeholder="AAPL, Apple...",
         key="search_control"
     )
+    if search_filter:
+        search = search_filter.lower()
+        quotes_df = quotes_df[
+            quotes_df['ticker'].str.lower().str.contains(search) |
+            quotes_df['name'].str.lower().str.contains(search)
+        ]
+
+    
+    # Price Grid
+    st.markdown("### Price Grid")
+    st.markdown("**Click on the stock to view details**")
+    # --- AG Grid setup ---
+    # Before building the grid, drop unnecessary columns for display
+    columns_to_drop = ['currency', 'bid', 'ask', 'year_high', 'year_low', 'market_cap']
+    display_df = quotes_df.drop(columns=[col for col in columns_to_drop if col in quotes_df.columns], errors='ignore')
+
+    gb = GridOptionsBuilder.from_dataframe(display_df)
+    gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=10)
+    gb.configure_default_column(editable=False, groupable=False)
+    gb.configure_selection('single', use_checkbox=False)
+    gb.configure_column(
+        "last_price",
+        header_name="Last Price",
+        type=["numericColumn"],
+        valueFormatter="`$${x.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`"
+    )
+    gb.configure_column(
+        "day_high",
+        header_name="Day High",
+        type=["numericColumn"],
+        valueFormatter="`$${x.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`"
+    )
+    gb.configure_column(
+        "day_low",
+        header_name="Day Low",
+        type=["numericColumn"],
+        valueFormatter="`$${x.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`"
+    )
+    gb.configure_column("change", header_name="Change", type=["numericColumn"], valueFormatter="x.toFixed(2)")
+    gb.configure_column("change_pct", header_name="% Change", type=["numericColumn"], valueFormatter="x.toFixed(2) + '%'")
+    gb.configure_column("volume", header_name="Volume", type=["numericColumn"])
+    gb.configure_column(
+        "volume",
+        header_name="Volume",
+        type=["numericColumn"],
+        valueFormatter="x.toLocaleString()"
+    )
+    gridOptions = gb.build()
+    gridOptions['enableRangeSelection'] = True
+    gridOptions['enableCellTextSelection'] = True
+    # --- AG Grid display ---
+    
+    response = AgGrid(
+        display_df,
+        gridOptions=gridOptions,
+        update_mode=GridUpdateMode.MODEL_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+        allow_unsafe_jscode=True,
+        theme='streamlit',
+        fit_columns_on_grid_load=True,
+        height=400
+    )
+    selected_rows = response['selected_rows']
+    if isinstance(selected_rows, pd.DataFrame) and len(selected_rows) > 0:
+        selected_ticker = selected_rows.iloc[0]['ticker']
+        st.session_state.selected_stock = selected_ticker
+        st.session_state.show_stock_modal = True
+    else:
+        pass
+        
+
     st.session_state.search_filter = search_filter
     
     # Default to 25 rows
@@ -435,224 +509,220 @@ with tab2:
     # Show fuzzy search indicator
     if st.session_state.search_filter and len(filtered_quotes) < len(sample_quotes):
         st.caption(f"Found {len(filtered_quotes)} matches for '{st.session_state.search_filter}'")
-    
-    # Sorting controls
-    sort_col1, sort_col2 = st.columns(2)
-    with sort_col1:
-        sort_column = st.selectbox(
-            "Sort by",
-            ["Ticker", "Name", "Last Price", "% Change", "Volume"],
-            index=0,
-            key="sort_column_control"
-        )
-        st.session_state.sort_column = sort_column.lower().replace(" ", "_")
-    
-    with sort_col2:
-        sort_direction = st.selectbox(
-            "Direction",
-            ["Ascending", "Descending"],
-            index=0,
-            key="sort_direction_control"
-        )
-        st.session_state.sort_direction = "asc" if sort_direction == "Ascending" else "desc"
-    
-    # Sort data
-    reverse_sort = st.session_state.sort_direction == "desc"
-    if st.session_state.sort_column == "ticker":
-        filtered_quotes.sort(key=lambda x: x["ticker"], reverse=reverse_sort)
-    elif st.session_state.sort_column == "name":
-        filtered_quotes.sort(key=lambda x: x["name"], reverse=reverse_sort)
-    elif st.session_state.sort_column == "last_price":
-        filtered_quotes.sort(key=lambda x: x["last_price"], reverse=reverse_sort)
-    elif st.session_state.sort_column == "change_pct":
-        filtered_quotes.sort(key=lambda x: x["change_pct"], reverse=reverse_sort)
-    elif st.session_state.sort_column == "volume":
-        filtered_quotes.sort(key=lambda x: x["volume"], reverse=reverse_sort)
-    
-    # Pagination
-    total_rows = len(filtered_quotes)
-    total_pages = (total_rows + st.session_state.rows_per_page - 1) // st.session_state.rows_per_page
-    
-    if 'current_page' not in st.session_state:
-        st.session_state.current_page = 0
-    
-    # Get current page data
-    start_idx = st.session_state.current_page * st.session_state.rows_per_page
-    end_idx = min(start_idx + st.session_state.rows_per_page, total_rows)
-    current_page_data = filtered_quotes[start_idx:end_idx]
-    
-    # Price Grid
-    st.markdown("### Price Grid")
-    
-    # Create the data grid using st.dataframe
-    if len(current_page_data) > 0:
-        # Prepare data for display
-        display_data = []
-        for quote in current_page_data:
-            # Format volume
-            if quote["volume"] >= 1000000:
-                volume_str = f"{quote['volume']/1000000:.1f}M"
-            elif quote["volume"] >= 1000:
-                volume_str = f"{quote['volume']/1000:.1f}K"
-            else:
-                volume_str = str(quote["volume"])
-            
-            # Determine color for change
-            change_color = "🟢" if quote["change"] >= 0 else "🔴"
-            
-            display_data.append({
-                "Ticker": quote["ticker"],
-                "Name": quote["name"],
-                "Last Price": f"${quote['last_price']:.2f}",
-                "Change": f"{change_color} {quote['change']:+.2f}",
-                "% Change": f"{quote['change_pct']:+.2f}%",
-                "Volume": volume_str,
-                "Bid": f"${quote['bid']:.2f}",
-                "Ask": f"${quote['ask']:.2f}"
-            })
-        
-        # Create dataframe
-        df = pd.DataFrame(display_data)
-        
-        # Display as clickable table rows using buttons
-        st.markdown("**Click on the stock button to view details**")
-        st.markdown("---")
-        # Header row
-        col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 3, 2, 2, 2, 2, 2, 2])
-        with col1:
-            st.markdown("**Ticker**")
-        with col2:
-            st.markdown("**Name**")
-        with col3:
-            st.markdown("**Last Price**")
-        with col4:
-            st.markdown("**Change**")
-        with col5:
-            st.markdown("**% Change**")
-        with col6:
-            st.markdown("**Volume**")
-        with col7:
-            st.markdown("**Bid**")
-        with col8:
-            st.markdown("**Ask**")
-        
-        # Data rows as clickable buttons
-        for i, quote in enumerate(current_page_data):
-            col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 3, 2, 2, 2, 2, 2, 2])
-            
-            with col1:
-                if st.button(f"**{quote['ticker']}**", key=f"ticker_{quote['ticker']}_{i}", use_container_width=True):
-                    st.session_state.selected_stock = quote['ticker']
-                    st.session_state.show_stock_modal = True
-                    st.rerun()
-            
-            with col2:
-                st.write(quote['name'])
-            with col3:
-                st.write(f"${quote['last_price']:.2f}")
-            with col4:
-                st.write(f"{quote['change']:+.2f}")
-            with col5:
-                st.write(f"{quote['change_pct']:+.2f}%")
-            with col6:
-                st.write(quote['volume'])
-            with col7:
-                st.write(f"${quote['bid']:.2f}")
-            with col8:
-                st.write(f"${quote['ask']:.2f}")
-        
-        # Pagination - moved below the table but above the stock selector
-        if total_pages > 1:        
-            # Calculate which page numbers to show
-            current = st.session_state.current_page + 1
-            max_pages = total_pages
-            
-            # Show page numbers (Google-style)
-            page_numbers = []
-            
-            # Always show first page
-            page_numbers.append(1)
-            
-            # Show pages around current page
-            start_page = max(2, current - 2)
-            end_page = min(max_pages - 1, current + 2)
-            
-            # Add ellipsis if there's a gap
-            if start_page > 2:
-                page_numbers.append("...")
-            
-            # Add middle pages
-            for page in range(start_page, end_page + 1):
-                if page not in page_numbers:
-                    page_numbers.append(page)
-            
-            # Add ellipsis if there's a gap
-            if end_page < max_pages - 1:
-                page_numbers.append("...")
-            
-            # Always show last page
-            if max_pages not in page_numbers:
-                page_numbers.append(max_pages)
-            
-            # Create elegant pagination using Streamlit's built-in functions
-            total_buttons = len(page_numbers) + 2  # +2 for Previous/Next
-            
-            # Center the pagination with proper spacing
-            # Use more columns for better centering
-            if total_buttons <= 7:
-                # Small pagination: [space] [buttons] [space]
-                cols = st.columns([1] + [1] * total_buttons + [1])
-            else:
-                # Large pagination: [more space] [buttons] [more space]
-                cols = st.columns([2] + [1] * total_buttons + [2])
-            
-            # Previous button
-            with cols[1]:
-                if st.button("◀", disabled=current == 1, key="prev_page", type="secondary"):
-                    st.session_state.current_page = max(0, current - 2)
-                    st.rerun()
-            
-            # Page number buttons
-            for i, page_num in enumerate(page_numbers):
-                with cols[i + 2]:
-                    if page_num == "...":
-                        st.write("...")
-                    elif page_num == current:
-                        # Current page - highlighted with Streamlit styling
-                        st.write(f"**{page_num}**")
-                    else:
-                        # Other pages - clickable
-                        if st.button(str(page_num), key=f"page_{page_num}", type="secondary"):
-                            st.session_state.current_page = page_num - 1
-                            st.rerun()
-            
-            # Next button
-            with cols[-2]:
-                if st.button("▶", disabled=current == max_pages, key="next_page", type="secondary"):
-                    st.session_state.current_page = min(max_pages - 1, current)
-                    st.rerun()
-            
-            # Page info
-            st.caption(f"Showing {total_rows} results across {total_pages} pages")
-            st.caption("**Source:** Data retrieved from 12data API on June 10, 2024.")
+    st.caption(f"Data source: Yahoo Finance | Last updated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}")    # --- Handle ticker button click ---
 
-    else:
-        st.warning("No stocks found matching your search criteria.")
+    # # Sorting controls
+    # sort_col1, sort_col2 = st.columns(2)
+    # with sort_col1:
+    #     sort_column = st.selectbox(
+    #         "Sort by",
+    #         ["Ticker", "Name", "Last Price", "% Change", "Volume"],
+    #         index=0,
+    #         key="sort_column_control"
+    #     )
+    #     st.session_state.sort_column = sort_column.lower().replace(" ", "_")
+    
+    # with sort_col2:
+    #     sort_direction = st.selectbox(
+    #         "Direction",
+    #         ["Ascending", "Descending"],
+    #         index=0,
+    #         key="sort_direction_control"
+    #     )
+    #     st.session_state.sort_direction = "asc" if sort_direction == "Ascending" else "desc"
+    
+    # # Sort data
+    # reverse_sort = st.session_state.sort_direction == "desc"
+    # if st.session_state.sort_column == "ticker":
+    #     filtered_quotes.sort(key=lambda x: x["ticker"], reverse=reverse_sort)
+    # elif st.session_state.sort_column == "name":
+    #     filtered_quotes.sort(key=lambda x: x["name"], reverse=reverse_sort)
+    # elif st.session_state.sort_column == "last_price":
+    #     filtered_quotes.sort(key=lambda x: x["last_price"], reverse=reverse_sort)
+    # elif st.session_state.sort_column == "change_pct":
+    #     filtered_quotes.sort(key=lambda x: x["change_pct"], reverse=reverse_sort)
+    # elif st.session_state.sort_column == "volume":
+    #     filtered_quotes.sort(key=lambda x: x["volume"], reverse=reverse_sort)
+    
+    # # Pagination
+    # total_rows = len(filtered_quotes)
+    # total_pages = (total_rows + st.session_state.rows_per_page - 1) // st.session_state.rows_per_page
+    
+    # if 'current_page' not in st.session_state:
+    #     st.session_state.current_page = 0
+    
+    # # Get current page data
+    # start_idx = st.session_state.current_page * st.session_state.rows_per_page
+    # end_idx = min(start_idx + st.session_state.rows_per_page, total_rows)
+    # current_page_data = filtered_quotes[start_idx:end_idx]
+
+    
+    # # Create the data grid using st.dataframe
+    # if len(current_page_data) > 0:
+    #     # Prepare data for display
+    #     display_data = []
+    #     for quote in current_page_data:
+    #         # Format volume
+    #         if quote["volume"] >= 1000000:
+    #             volume_str = f"{quote['volume']/1000000:.1f}M"
+    #         elif quote["volume"] >= 1000:
+    #             volume_str = f"{quote['volume']/1000:.1f}K"
+    #         else:
+    #             volume_str = str(quote["volume"])
+            
+    #         # Determine color for change
+    #         change_color = "🟢" if quote["change"] >= 0 else "🔴"
+            
+    #         display_data.append({
+    #             "Ticker": quote["ticker"],
+    #             "Name": quote["name"],
+    #             "Last Price": f"${quote['last_price']:.2f}",
+    #             "Change": f"{change_color} {quote['change']:+.2f}",
+    #             "% Change": f"{quote['change_pct']:+.2f}%",
+    #             "Volume": volume_str,
+    #             "Bid": f"${quote['bid']:.2f}",
+    #             "Ask": f"${quote['ask']:.2f}"
+    #         })
+        
+    #     # Create dataframe
+    #     df = pd.DataFrame(display_data)
+        
+    #     # Display as clickable table rows using buttons
+
+    #     # Header row
+    #     col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 3, 2, 2, 2, 2, 2, 2])
+    #     with col1:
+    #         st.markdown("**Ticker**")
+    #     with col2:
+    #         st.markdown("**Name**")
+    #     with col3:
+    #         st.markdown("**Last Price**")
+    #     with col4:
+    #         st.markdown("**Change**")
+    #     with col5:
+    #         st.markdown("**% Change**")
+    #     with col6:
+    #         st.markdown("**Volume**")
+    #     with col7:
+    #         st.markdown("**Bid**")
+    #     with col8:
+    #         st.markdown("**Ask**")
+        
+    #     # Data rows as clickable buttons
+    #     for i, quote in enumerate(current_page_data):
+    #         col1, col2, col3, col4, col5, col6, col7, col8 = st.columns([2, 3, 2, 2, 2, 2, 2, 2])
+            
+    #         with col1:
+    #             if st.button(f"**{quote['ticker']}**", key=f"ticker_{quote['ticker']}_{i}", use_container_width=True):
+    #                 st.session_state.selected_stock = quote['ticker']
+    #                 st.session_state.show_stock_modal = True
+    #                 st.rerun()
+            
+    #         with col2:
+    #             st.write(quote['name'])
+    #         with col3:
+    #             st.write(f"${quote['last_price']:.2f}")
+    #         with col4:
+    #             st.write(f"{quote['change']:+.2f}")
+    #         with col5:
+    #             st.write(f"{quote['change_pct']:+.2f}%")
+    #         with col6:
+    #             st.write(quote['volume'])
+    #         with col7:
+    #             st.write(f"${quote['bid']:.2f}")
+    #         with col8:
+    #             st.write(f"${quote['ask']:.2f}")
+        
+    #     # Pagination - moved below the table but above the stock selector
+    #     if total_pages > 1:        
+    #         # Calculate which page numbers to show
+    #         current = st.session_state.current_page + 1
+    #         max_pages = total_pages
+            
+    #         # Show page numbers (Google-style)
+    #         page_numbers = []
+            
+    #         # Always show first page
+    #         page_numbers.append(1)
+            
+    #         # Show pages around current page
+    #         start_page = max(2, current - 2)
+    #         end_page = min(max_pages - 1, current + 2)
+            
+    #         # Add ellipsis if there's a gap
+    #         if start_page > 2:
+    #             page_numbers.append("...")
+            
+    #         # Add middle pages
+    #         for page in range(start_page, end_page + 1):
+    #             if page not in page_numbers:
+    #                 page_numbers.append(page)
+            
+    #         # Add ellipsis if there's a gap
+    #         if end_page < max_pages - 1:
+    #             page_numbers.append("...")
+            
+    #         # Always show last page
+    #         if max_pages not in page_numbers:
+    #             page_numbers.append(max_pages)
+            
+    #         # Create elegant pagination using Streamlit's built-in functions
+    #         total_buttons = len(page_numbers) + 2  # +2 for Previous/Next
+            
+    #         # Center the pagination with proper spacing
+    #         # Use more columns for better centering
+    #         if total_buttons <= 7:
+    #             # Small pagination: [space] [buttons] [space]
+    #             cols = st.columns([1] + [1] * total_buttons + [1])
+    #         else:
+    #             # Large pagination: [more space] [buttons] [more space]
+    #             cols = st.columns([2] + [1] * total_buttons + [2])
+            
+    #         # Previous button
+    #         with cols[1]:
+    #             if st.button("◀", disabled=current == 1, key="prev_page", type="secondary"):
+    #                 st.session_state.current_page = max(0, current - 2)
+    #                 st.rerun()
+            
+    #         # Page number buttons
+    #         for i, page_num in enumerate(page_numbers):
+    #             with cols[i + 2]:
+    #                 if page_num == "...":
+    #                     st.write("...")
+    #                 elif page_num == current:
+    #                     # Current page - highlighted with Streamlit styling
+    #                     st.write(f"**{page_num}**")
+    #                 else:
+    #                     # Other pages - clickable
+    #                     if st.button(str(page_num), key=f"page_{page_num}", type="secondary"):
+    #                         st.session_state.current_page = page_num - 1
+    #                         st.rerun()
+            
+    #         # Next button
+    #         with cols[-2]:
+    #             if st.button("▶", disabled=current == max_pages, key="next_page", type="secondary"):
+    #                 st.session_state.current_page = min(max_pages - 1, current)
+    #                 st.rerun()
+            
+    #         # Page info
+    #         st.caption(f"Showing {total_rows} results across {total_pages} pages")
+    #         st.caption("**Source:** Data retrieved from 12data API on June 10, 2024.")
+
+    # else:
+    #     st.warning("No stocks found matching your search criteria.")
 
     st.markdown("---")
     
     # Detail Modal
     if st.session_state.show_stock_modal and st.session_state.selected_stock:
-        # Find the selected stock data
+        # Find the selected stock data from quotes_df
+        selected_row = quotes_df[quotes_df['ticker'] == st.session_state.selected_stock]
         selected_stock_data = None
-        for quote in sample_quotes:
-            if quote["ticker"] == st.session_state.selected_stock:
-                selected_stock_data = quote
-                break
+        if not selected_row.empty:
+            selected_stock_data = selected_row.iloc[0]
         
-        if selected_stock_data:            
+        if selected_stock_data is not None:
             with st.container():
-                
                 # Header with close button
                 col1, col2 = st.columns([4, 1])
                 with col1:
@@ -664,114 +734,73 @@ with tab2:
                         st.rerun()
                 
                 # Time interval selector
-                time_interval = st.selectbox(
+                interval_map = {
+                    "1 minute": ("1m", "1d"),
+                    "5 minutes": ("5m", "1d"),
+                    "15 minutes": ("15m", "1d"),
+                    "1 hour": ("1h", "1mo"),
+                    "1 day": ("1d", "1y"),
+                }
+                interval_label = st.selectbox(
                     "Time Interval:",
-                    ["1 minute", "5 minutes", "15 minutes", "1 hour", "1 day"],
-                    index=1,
+                    list(interval_map.keys()),
+                    index=1,  # Default to 5 minutes
                     key="time_interval"
                 )
+                interval, period = interval_map[interval_label]
                 
-                # Generate static candlestick data
-                current_time = pd.Timestamp.now()
+                # Fetch real OHLC data from Yahoo Finance
+                try:
+                    data = yf.Ticker(selected_stock_data['ticker']).history(interval=interval, period=period)
+                except Exception as e:
+                    data = None
+                    st.warning(f"Error fetching data: {e}")
                 
-                # Create sample OHLC data based on time interval
-                if time_interval == "1 minute":
-                    periods = 60
-                    freq = "1min"
-                elif time_interval == "5 minutes":
-                    periods = 48
-                    freq = "5min"
-                elif time_interval == "15 minutes":
-                    periods = 32
-                    freq = "15min"
-                elif time_interval == "1 hour":
-                    periods = 24
-                    freq = "1H"
-                else:  # 1 day
-                    periods = 30
-                    freq = "1D"
-                
-                # Generate realistic OHLC data
-                base_price = selected_stock_data['last_price']
-                times = pd.date_range(end=current_time, periods=periods, freq=freq)
-                
-                # Create realistic candlestick data
-                opens = []
-                highs = []
-                lows = []
-                closes = []
-                
-                current_price = base_price
-                for i in range(periods):
-                    # Simulate price movement
-                    price_change = np.random.normal(0, base_price * 0.01)
-                    current_price += price_change
-                    
-                    # Create OHLC for this period
-                    open_price = current_price
-                    high_price = open_price + abs(np.random.normal(0, base_price * 0.005))
-                    low_price = open_price - abs(np.random.normal(0, base_price * 0.005))
-                    close_price = open_price + np.random.normal(0, base_price * 0.003)
-                    
-                    # Ensure high >= max(open, close) and low <= min(open, close)
-                    high_price = max(high_price, open_price, close_price)
-                    low_price = min(low_price, open_price, close_price)
-                    
-                    opens.append(open_price)
-                    highs.append(high_price)
-                    lows.append(low_price)
-                    closes.append(close_price)
-                    
-                    current_price = close_price
-                
-                # Create candlestick chart
-                fig_candlestick = go.Figure(data=[go.Candlestick(
-                    x=times,
-                    open=opens,
-                    high=highs,
-                    low=lows,
-                    close=closes,
-                    increasing_line_color='#26a69a',
-                    decreasing_line_color='#ef5350',
-                    increasing_fillcolor='#26a69a',
-                    decreasing_fillcolor='#ef5350',
-                    name=selected_stock_data['ticker']
-                )])
-                
-                fig_candlestick.update_layout(
-                    title=f"{selected_stock_data['ticker']} Candlestick Chart ({time_interval})",
-                    xaxis_title="Time",
-                    yaxis_title="Price ($)",
-                    height=500,
-                    xaxis_rangeslider_visible=False,
-                    template="plotly_white"
-                )
-                
-                # Add volume bars
-                volumes = [np.random.randint(100000, 1000000) for _ in range(periods)]
-                fig_candlestick.add_trace(go.Bar(
-                    x=times,
-                    y=volumes,
-                    name="Volume",
-                    yaxis="y2",
-                    opacity=0.3,
-                    marker_color='lightblue'
-                ))
-                
-                fig_candlestick.update_layout(
-                    yaxis2=dict(
-                        title="Volume",
-                        overlaying="y",
-                        side="right"
+                if data is not None and not data.empty:
+                    fig_candlestick = go.Figure(data=[go.Candlestick(
+                        x=data.index,
+                        open=data['Open'],
+                        high=data['High'],
+                        low=data['Low'],
+                        close=data['Close'],
+                        increasing_line_color='#26a69a',
+                        decreasing_line_color='#ef5350',
+                        increasing_fillcolor='#26a69a',
+                        decreasing_fillcolor='#ef5350',
+                        name=selected_stock_data['ticker']
+                    )])
+                    fig_candlestick.update_layout(
+                        title=f"{selected_stock_data['ticker']} Candlestick Chart ({interval_label})",
+                        xaxis_title="Time",
+                        yaxis_title="Price ($)",
+                        height=500,
+                        xaxis_rangeslider_visible=False,
+                        template="plotly_white"
                     )
-                )
-                
-                st.plotly_chart(fig_candlestick, use_container_width=True)
+                    # Add volume bars
+                    fig_candlestick.add_trace(go.Bar(
+                        x=data.index,
+                        y=data['Volume'],
+                        name="Volume",
+                        yaxis="y2",
+                        opacity=0.3,
+                        marker_color='lightblue'
+                    ))
+                    fig_candlestick.update_layout(
+                        yaxis2=dict(
+                            title="Volume",
+                            overlaying="y",
+                            side="right"
+                        )
+                    )
+                    st.plotly_chart(fig_candlestick, use_container_width=True)
+                else:
+                    st.warning("No candlestick data available for this interval.")
                 
                 # Stats
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Current Price", f"${closes[-1]:.2f}", f"{closes[-1] - closes[-2]:+.2f}")
+                    st.metric("Current Price", f"${selected_stock_data['last_price']:.2f}")
                 with col2:
                     st.metric("Day High", f"${selected_stock_data['day_high']:.2f}")
                 with col3:
@@ -795,29 +824,20 @@ with tab2:
                 col1, col2 = st.columns(2)
                 with col1:
                     # Create sample CSV data for download
-                    df_export = pd.DataFrame({
-                        'Time': times,
-                        'Open': opens,
-                        'High': highs,
-                        'Low': lows,
-                        'Close': closes,
-                        'Volume': volumes
-                    })
-                    st.download_button(
-                        label="Download CSV",
-                        data=df_export.to_csv(index=False),
-                        file_name=f"{selected_stock_data['ticker']}_{time_interval.replace(' ', '_')}.csv",
-                        mime="text/csv"
-                    )
-                
+                    if data is not None and not data.empty:
+                        df_export = data.reset_index()[['Datetime' if 'Datetime' in data.reset_index().columns else data.index.name, 'Open', 'High', 'Low', 'Close', 'Volume']]
+                        st.download_button(
+                            label="Download CSV",
+                            data=df_export.to_csv(index=False),
+                            file_name=f"{selected_stock_data['ticker']}_{interval.replace(' ', '_')}.csv",
+                            mime="text/csv"
+                        )
                 with col2:
                     # Empty column for layout balance
                     st.write("")
-                
                 # Footer with external link
                 st.markdown("---")
                 st.markdown(f"[View {selected_stock_data['ticker']} on Yahoo Finance](https://finance.yahoo.com/quote/{selected_stock_data['ticker']})")
-                
                 st.markdown('</div>', unsafe_allow_html=True)
 
 
